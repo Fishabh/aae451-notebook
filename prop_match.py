@@ -70,12 +70,12 @@ Q_prop = q_prop*A_prop*r_prop*CP  # torque of prop
 
 
 #%%
-def solve_nlp(prop_name):
+def solve_nlp(prop_name, thrust, velocity):
     rho0 = 1.225
     i0_motor0 = 0.04
-    V_inf0 = 1
+    V_inf0 = velocity  ### Velocity constraint
     R_motor0 = 0.05
-    T_desired = 0.1
+    T_desired = thrust   #### Thrust constraint
 
     prop_data = prop_db[prop_name]
     key0 = list(prop_data['dynamic'].keys())[0]
@@ -186,20 +186,23 @@ def rpm_sweep(prop_name, v0, kv0, i0_motor0, V_inf0, R_motor0):
     max_eta_prop = np.nanmax(f_eta_prop_array)
     index = np.where(f_eta_prop_array == max_eta_prop)
     omega = rpm[0][index][0]
+    T = np.array(f_T_prop(omega, p0))[0]
+    Q = np.array(f_Q_prop(omega, p0))[0]
     
     display(Math(r'\eta_{prop, max} = ' + str(max_eta_prop) \
         + r'\ at\ \Omega =\ ' + str(omega) + r'\ \frac{rev}{min}'))
 
     ## TODO get ideal motor properties in a dictionary and store them, including motor eta
-    data = {'prop_name': prop_name, 'max_eta_prop': max_eta_prop, 'omega': omega}
+    data = {'prop_name': prop_name, 'max_eta_prop': max_eta_prop, 'omega': omega, 'T': T, 'Q': Q}
+    
     store(data)
 
 #%%
 
-def out():
+def out(thrust, velocity):
     sb.call(['rm','propstuff/efficiency.xlsx'])
     for prop_name in prop_db.keys():
-        res, stats = solve_nlp(prop_name)
+        res, stats = solve_nlp(prop_name, thrust, velocity)
 
 def store(data):
     f = 'propstuff/efficiency.xlsx'
