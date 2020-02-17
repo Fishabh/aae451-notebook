@@ -3,6 +3,11 @@ import casadi as ca
 import numpy as np
 import matplotlib.pyplot as plt
 import prop_uiuc
+from IPython.display import display, Math
+import pandas as pd
+from openpyxl import load_workbook
+from os import path
+import subprocess as sb
 
 prop_db = prop_uiuc.parse_database(False)
 #%%
@@ -37,7 +42,7 @@ v_batt = syms.declare(name='v_batt', desc='Battery voltage', value=11.1, lower=3
 V_inf = syms.declare(name='V_inf', desc='Freestream velocity', value=1, lower=0, upper=10, unit='volt')
 rho = syms.declare(name='rho', desc='air density', value=1.225, lower=1, upper=2, unit='kg/m^3')
 CT = syms.declare(name='CT', desc='Motor thrust constant', value=0, lower=0, upper=10, unit='')
-CP = syms.declare(name='CP', desc='Motor torque constant', value=0, lower=0, upper=0, unit='')
+CP = syms.declare(name='CP', desc='Motor torque constant', value=0, lower=0, upper=0, unit='') ## lower = upper??
 
 
 n = rpm_prop / 60  # angular velocity, rev/s
@@ -65,12 +70,12 @@ Q_prop = q_prop*A_prop*r_prop*CP  # torque of prop
 
 
 #%%
-def solve_nlp(prop_name):
+def solve_nlp(prop_name, thrust, velocity):
     rho0 = 1.225
     i0_motor0 = 0.04
-    V_inf0 = 1
+    V_inf0 = velocity  ### Velocity constraint
     R_motor0 = 0.05
-    T_desired = 0.1
+    T_desired = thrust   #### Thrust constraint
 
     prop_data = prop_db[prop_name]
     key0 = list(prop_data['dynamic'].keys())[0]
@@ -114,7 +119,9 @@ def solve_nlp(prop_name):
     stats = S.stats()
 
     if stats['success']:
-        print(prop_name, res['x'], res['g'], -res['f'])
+        print('\n')
+        print('propeller -> ' + prop_name, res['x'], res['g'], -res['f'])
+        print('\n')
         v0 = float(res['x'][1])
         kv0 = float(res['x'][2])
         if -res['f'] > 0.3:
@@ -136,7 +143,7 @@ def rpm_sweep(prop_name, v0, kv0, i0_motor0, V_inf0, R_motor0):
 
     states = ca.vertcat(rpm_prop)
     params = ca.vertcat(rho, r_prop_in, v_batt, Kv_motor, i0_motor, V_inf, R_motor)
-
+    
     p0 = [1.225, prop_data['D']/2, v0, kv0, i0_motor0, V_inf0, R_motor0]
 
     f_Q_prop = ca.Function('Q_prop', [states, params], [Q_prop_lut])
@@ -174,6 +181,41 @@ def rpm_sweep(prop_name, v0, kv0, i0_motor0, V_inf0, R_motor0):
     plt.gca().set_ylim(0, 1)
     plt.show()
 
+    ## scipy.sparse.csc_matrix is said to be better by casadi author
+    f_eta_prop_array = np.array(f_eta_prop(rpm,p0))[0]
+    max_eta_prop = np.nanmax(f_eta_prop_array)
+    index = np.where(f_eta_prop_array == max_eta_prop)
+    omega = rpm[0][index][0]
+    T = np.array(f_T_prop(omega, p0))[0]
+    Q = np.array(f_Q_prop(omega, p0))[0]
+    
+    display(Math(r'\eta_{prop, max} = ' + str(max_eta_prop) \
+        + r'\ at\ \Omega =\ ' + str(omega) + r'\ \frac{rev}{min}'))
+
+    ## TODO get ideal motor properties in a dictionary and store them, including motor eta
+    data = {'prop_name': prop_name, 'max_eta_prop': max_eta_prop, 'omega': omega, 'T': T, 'Q': Q}
+    
+    store(data)
+
 #%%
-for prop_name in prop_db.keys():
-    res, stats = solve_nlp(prop_name)
+
+def out(thrust, velocity):
+    sb.call(['rm','propstuff/efficiency.xlsx'])
+    for prop_name in prop_db.keys():
+        res, stats = solve_nlp(prop_name, thrust, velocity)
+
+def store(data):
+    f = 'propstuff/efficiency.xlsx'
+    if not path.exists(f):
+        writer = pd.ExcelWriter(f, engine='xlsxwriter')
+        df = pd.DataFrame(data, index=[0])
+        df.to_excel(writer, sheet_name='sheet1', index=False)
+        writer.save()
+    else:
+        df = pd.DataFrame(data, index=[0])
+        writer = pd.ExcelWriter(f, engine='openpyxl')
+        writer.book = load_workbook(f)
+        writer.sheets = dict((ws.title, ws) for ws in writer.book.worksheets)
+        reader = pd.read_excel(f)
+        df.to_excel(writer, index=False, header=False, startrow=len(reader)+1, sheet_name='sheet1')
+        writer.close()
